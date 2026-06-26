@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+	"time"
 
 	"keyklik/internal/input"
 )
@@ -50,6 +51,31 @@ func (s *sequenceReader) ReadEvent() (input.Event, error) {
 }
 
 func (s *sequenceReader) Close() error { return nil }
+
+type timedEvent struct {
+	ev    input.Event
+	delay time.Duration
+}
+
+type timedSequenceReader struct {
+	events []timedEvent
+	next   int
+	err    error
+}
+
+func (s *timedSequenceReader) ReadEvent() (input.Event, error) {
+	if s.next < len(s.events) {
+		item := s.events[s.next]
+		s.next++
+		if item.delay > 0 {
+			time.Sleep(item.delay)
+		}
+		return item.ev, nil
+	}
+	return input.Event{}, s.err
+}
+
+func (s *timedSequenceReader) Close() error { return nil }
 
 func TestRun_NoDeviceArg_UsesDefaultKeyboardDevice(t *testing.T) {
 	origNewClickPool := newClickPool
@@ -194,5 +220,100 @@ func TestRun_ModifierKey_UsesModifierClickPool(t *testing.T) {
 	}
 	if modifierPool.plays != 1 {
 		t.Fatalf("expected modifier pool plays 1, got %d", modifierPool.plays)
+	}
+}
+
+func TestRun_KeyRepeatDoesNotPlayAgain(t *testing.T) {
+	origNewClickPool := newClickPool
+	origOpenReader := openReader
+	origDefaultKeyboardDevice := defaultKeyboardDevice
+	defer func() {
+		newClickPool = origNewClickPool
+		openReader = origOpenReader
+		defaultKeyboardDevice = origDefaultKeyboardDevice
+	}()
+
+	stopErr := errors.New("stop loop")
+	regularPool := &countingClickPool{}
+	modifierPool := &countingClickPool{}
+	poolCall := 0
+
+	newClickPool = func(sampleRate int, volume float64, pitchLevel int, poolSize int) (clickPool, error) {
+		poolCall++
+		if poolCall == 1 {
+			return regularPool, nil
+		}
+		return modifierPool, nil
+	}
+	defaultKeyboardDevice = func() (string, error) {
+		return "/dev/input/by-path/platform-i8042-serio-0-event-kbd", nil
+	}
+	openReader = func(devicePath string) (eventReader, error) {
+		return &sequenceReader{
+			events: []input.Event{
+				{Type: 0x01, Code: 30, Value: input.KeyDown},
+				{Type: 0x01, Code: 30, Value: input.KeyDown},
+			},
+			err: stopErr,
+		}, nil
+	}
+
+	err := Run([]string{"keyklik"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if !errors.Is(err, stopErr) {
+		t.Fatalf("expected stop error, got %v", err)
+	}
+	if regularPool.plays != 1 {
+		t.Fatalf("expected regular pool plays 1, got %d", regularPool.plays)
+	}
+	if modifierPool.plays != 0 {
+		t.Fatalf("expected modifier pool plays 0, got %d", modifierPool.plays)
+	}
+}
+
+func TestRun_KeyUpAllowsNewClick(t *testing.T) {
+	origNewClickPool := newClickPool
+	origOpenReader := openReader
+	origDefaultKeyboardDevice := defaultKeyboardDevice
+	defer func() {
+		newClickPool = origNewClickPool
+		openReader = origOpenReader
+		defaultKeyboardDevice = origDefaultKeyboardDevice
+	}()
+
+	stopErr := errors.New("stop loop")
+	regularPool := &countingClickPool{}
+	modifierPool := &countingClickPool{}
+	poolCall := 0
+
+	newClickPool = func(sampleRate int, volume float64, pitchLevel int, poolSize int) (clickPool, error) {
+		poolCall++
+		if poolCall == 1 {
+			return regularPool, nil
+		}
+		return modifierPool, nil
+	}
+	defaultKeyboardDevice = func() (string, error) {
+		return "/dev/input/by-path/platform-i8042-serio-0-event-kbd", nil
+	}
+	openReader = func(devicePath string) (eventReader, error) {
+		return &timedSequenceReader{
+			events: []timedEvent{
+				{ev: input.Event{Type: 0x01, Code: 30, Value: input.KeyDown}},
+				{ev: input.Event{Type: 0x01, Code: 30, Value: input.KeyUp}},
+				{ev: input.Event{Type: 0x01, Code: 30, Value: input.KeyDown}, delay: minClickGap + (2 * time.Millisecond)},
+			},
+			err: stopErr,
+		}, nil
+	}
+
+	err := Run([]string{"keyklik"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if !errors.Is(err, stopErr) {
+		t.Fatalf("expected stop error, got %v", err)
+	}
+	if regularPool.plays != 2 {
+		t.Fatalf("expected regular pool plays 2, got %d", regularPool.plays)
+	}
+	if modifierPool.plays != 0 {
+		t.Fatalf("expected modifier pool plays 0, got %d", modifierPool.plays)
 	}
 }
