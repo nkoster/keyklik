@@ -10,6 +10,7 @@ import (
 	"keyklik/internal/audio"
 	"keyklik/internal/config"
 	"keyklik/internal/input"
+	"keyklik/internal/util"
 )
 
 const (
@@ -41,11 +42,11 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 	cfg, err := config.Parse(args)
 	if err != nil {
 		if errors.Is(err, config.ErrHelp) {
-			fmt.Fprint(stdout, config.Usage(args[0]))
+			util.Ignore(fmt.Fprint(stdout, config.Usage(args[0])))
 			return nil
 		}
 
-		fmt.Fprint(stderr, config.Usage(args[0]))
+		util.Ignore(fmt.Fprint(stderr, config.Usage(args[0])))
 		return err
 	}
 
@@ -73,7 +74,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
+	defer util.IgnoreErr(reader.Close)
 
 	log.Printf("listening on %s", cfg.KeyboardDevice)
 	log.Printf("click config: sample rate %d, regular volume %.2f, regular pitch level %d, modifier volume %.2f, modifier pitch level %d", config.SampleRate, cfg.Volume, cfg.PitchLevel, cfg.ModifierVolume, cfg.ModifierPitch)
