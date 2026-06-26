@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	DefaultVolume         = 0.30
-	DefaultPitch          = 3
-	DefaultModifierVolume = 0.17
-	DefaultModifierPitch  = 4
+	DefaultVolume         = 0.2
+	DefaultPitch          = 1
+	DefaultModifierVolume = 0.1
+	DefaultModifierPitch  = 2
 	SampleRate            = 48000
 	byPathDir             = "/dev/input/by-path"
 	preferredKbd          = "platform-i8042-serio-0-event-kbd"
