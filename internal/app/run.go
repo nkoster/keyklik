@@ -17,6 +17,26 @@ const (
 	minClickGap    = 8 * time.Millisecond
 )
 
+type clickPool interface {
+	Play() error
+	Close()
+}
+
+type eventReader interface {
+	ReadEvent() (input.Event, error)
+	Close() error
+}
+
+var (
+	newClickPool = func(sampleRate int, volume float64, pitchLevel int, poolSize int) (clickPool, error) {
+		return audio.NewClickPool(sampleRate, volume, pitchLevel, poolSize)
+	}
+	openReader = func(devicePath string) (eventReader, error) {
+		return input.Open(devicePath)
+	}
+	defaultKeyboardDevice = config.DefaultKeyboardDevice
+)
+
 func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 	cfg, err := config.Parse(args)
 	if err != nil {
@@ -30,20 +50,20 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 
 	if cfg.KeyboardDevice == "" {
-		device, err := config.DefaultKeyboardDevice()
+		device, err := defaultKeyboardDevice()
 		if err != nil {
 			return err
 		}
 		cfg.KeyboardDevice = device
 	}
 
-	clickPool, err := audio.NewClickPool(config.SampleRate, cfg.Volume, cfg.PitchLevel, playerPoolSize)
+	clickPool, err := newClickPool(config.SampleRate, cfg.Volume, cfg.PitchLevel, playerPoolSize)
 	if err != nil {
 		return err
 	}
 	defer clickPool.Close()
 
-	reader, err := input.Open(cfg.KeyboardDevice)
+	reader, err := openReader(cfg.KeyboardDevice)
 	if err != nil {
 		return err
 	}

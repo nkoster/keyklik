@@ -192,15 +192,29 @@ func defaultKeyboardDevice() (string, error) {
 		return "", fmt.Errorf("detect default keyboard device: %w", err)
 	}
 
+	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Name() == preferredKbd {
-			return filepath.Join(byPathDir, entry.Name()), nil
+		names = append(names, entry.Name())
+	}
+
+	name, err := selectKeyboardDeviceName(names)
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(byPathDir, name), nil
+}
+
+func selectKeyboardDeviceName(names []string) (string, error) {
+	for _, name := range names {
+		if name == preferredKbd {
+			return name, nil
 		}
 	}
 
-	for _, entry := range entries {
-		if strings.Contains(entry.Name(), "kbd") {
-			return filepath.Join(byPathDir, entry.Name()), nil
+	for _, name := range names {
+		if strings.Contains(name, "kbd") {
+			return name, nil
 		}
 	}
 
