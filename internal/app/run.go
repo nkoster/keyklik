@@ -77,7 +77,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 	defer util.IgnoreErr(reader.Close)
 
 	log.Printf("listening on %s", cfg.KeyboardDevice)
-	log.Printf("click config: sample rate %d, regular volume %.2f, regular pitch level %d, modifier volume %.2f, modifier pitch level %d", config.SampleRate, cfg.Volume, cfg.PitchLevel, cfg.ModifierVolume, cfg.ModifierPitch)
+	log.Printf("click config: regular volume %.2f, regular pitch level %d, modifier volume %.2f, modifier pitch level %d", cfg.Volume, cfg.PitchLevel, cfg.ModifierVolume, cfg.ModifierPitch)
 
 	pressedKeys := make(map[uint16]bool)
 	lastClick := time.Time{}
