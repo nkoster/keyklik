@@ -27,7 +27,7 @@ type Config struct {
 	PitchLevel     int
 	ModifierVolume float64
 	ModifierPitch  int
-	Background     bool
+	Foreground     bool
 	PIDFile        string
 	Stop           bool
 }
@@ -37,7 +37,7 @@ func Usage(program string) string {
   %s [/dev/input/eventX] [volume 0.0-1.0 | pitch 1-5] [pitch 1-5]
   %s [/dev/input/eventX] [--volume 0.0-1.0] [--pitch 1-5]
   %s [/dev/input/eventX] [--volume=0.0-1.0] [--pitch=1-5]
-  %s [/dev/input/eventX] [--modifier-volume 0.0-1.0] [--modifier-pitch 1-5] [--background] [--pidfile /path/to/keyklik.pid]
+  %s [/dev/input/eventX] [--modifier-volume 0.0-1.0] [--modifier-pitch 1-5] [--foreground] [--pidfile /path/to/keyklik.pid]
   %s --stop [--pidfile /path/to/keyklik.pid]
 
 Examples:
@@ -48,11 +48,12 @@ Examples:
   %s 0.20 5
   %s --volume 0.20 --pitch 4
   %s --volume 0.20 --pitch 4 --modifier-volume 0.35 --modifier-pitch 2
-  %s --background
+  %s
+  %s --foreground
   %s --stop
-  %s --background --pidfile /tmp/keyklik.pid
+  %s --pidfile /tmp/keyklik.pid
   %s --stop --pidfile /tmp/keyklik.pid
-`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
+`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
 }
 
 func Parse(args []string) (Config, error) {
@@ -154,7 +155,9 @@ func Parse(args []string) (Config, error) {
 			}
 			flagModifierPitch = &p
 		case arg == "--background":
-			cfg.Background = true
+			return cfg, fmt.Errorf("--background is no longer needed; use --foreground to run in foreground")
+		case arg == "--foreground":
+			cfg.Foreground = true
 		case arg == "--pidfile":
 			if i+1 >= len(args) {
 				return cfg, fmt.Errorf("missing value for --pidfile")
@@ -168,10 +171,6 @@ func Parse(args []string) (Config, error) {
 		default:
 			positional = append(positional, arg)
 		}
-	}
-
-	if cfg.Background && cfg.Stop {
-		return cfg, fmt.Errorf("--background and --stop cannot be used together")
 	}
 
 	if len(positional) > 2 {

@@ -13,6 +13,42 @@ import (
 
 type stubClickPool struct{}
 
+func TestRun_DefaultMode_StartsBackgroundProcess(t *testing.T) {
+	origStartDetachedProcess := startDetachedProcess
+	origWritePIDFile := writePIDFile
+	defer func() {
+		startDetachedProcess = origStartDetachedProcess
+		writePIDFile = origWritePIDFile
+	}()
+
+	var startedPath string
+	var startedArgs []string
+	var pidfilePath string
+	startDetachedProcess = func(path string, args []string) (int, error) {
+		startedPath = path
+		startedArgs = append([]string(nil), args...)
+		return 4321, nil
+	}
+	writePIDFile = func(path string, pid int) error {
+		pidfilePath = path
+		return nil
+	}
+
+	err := Run([]string{"keyklik"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if startedPath != "keyklik" {
+		t.Fatalf("expected started path %q, got %q", "keyklik", startedPath)
+	}
+	if len(startedArgs) != 1 || startedArgs[0] != "--foreground" {
+		t.Fatalf("expected child args [--foreground], got %v", startedArgs)
+	}
+	if pidfilePath == "" {
+		t.Fatal("expected default pidfile path to be used")
+	}
+}
+
 func (s *stubClickPool) Play() error { return nil }
 func (s *stubClickPool) Close()      {}
 
@@ -104,7 +140,7 @@ func TestRun_NoDeviceArg_UsesDefaultKeyboardDevice(t *testing.T) {
 		return &stubReader{err: stopErr}, nil
 	}
 
-	err := Run([]string{"keyklik"}, &bytes.Buffer{}, &bytes.Buffer{})
+	err := Run([]string{"keyklik", "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("expected stop error, got %v", err)
 	}
@@ -113,7 +149,7 @@ func TestRun_NoDeviceArg_UsesDefaultKeyboardDevice(t *testing.T) {
 	}
 }
 
-func TestRun_Background_StartsDetachedProcessAndReturns(t *testing.T) {
+func TestRun_DefaultBackground_StartsDetachedProcessAndReturns(t *testing.T) {
 	origNewClickPool := newClickPool
 	origOpenReader := openReader
 	origDefaultKeyboardDevice := defaultKeyboardDevice
@@ -156,7 +192,7 @@ func TestRun_Background_StartsDetachedProcessAndReturns(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	err := Run([]string{"keyklik", "/dev/input/event9", "--background", "--volume", "0.20"}, &bytes.Buffer{}, &stderr)
+	err := Run([]string{"keyklik", "/dev/input/event9", "--volume", "0.20"}, &bytes.Buffer{}, &stderr)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -165,7 +201,7 @@ func TestRun_Background_StartsDetachedProcessAndReturns(t *testing.T) {
 		t.Fatalf("expected started path %q, got %q", "keyklik", startedPath)
 	}
 
-	expectedArgs := []string{"/dev/input/event9", "--volume", "0.20"}
+	expectedArgs := []string{"/dev/input/event9", "--volume", "0.20", "--foreground"}
 	if len(startedArgs) != len(expectedArgs) {
 		t.Fatalf("expected %d args, got %d (%v)", len(expectedArgs), len(startedArgs), startedArgs)
 	}
@@ -190,7 +226,7 @@ func TestRun_Background_StartsDetachedProcessAndReturns(t *testing.T) {
 	}
 }
 
-func TestRun_Background_WithPIDFile_WritesPID(t *testing.T) {
+func TestRun_DefaultBackground_WithPIDFile_WritesPID(t *testing.T) {
 	origNewClickPool := newClickPool
 	origOpenReader := openReader
 	origDefaultKeyboardDevice := defaultKeyboardDevice
@@ -229,7 +265,7 @@ func TestRun_Background_WithPIDFile_WritesPID(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	err := Run([]string{"keyklik", "--background", "--pidfile", "/tmp/keyklik.pid"}, &bytes.Buffer{}, &stderr)
+	err := Run([]string{"keyklik", "--pidfile", "/tmp/keyklik.pid"}, &bytes.Buffer{}, &stderr)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -369,7 +405,7 @@ func TestRun_ExplicitDeviceArg_SkipsDefaultDetection(t *testing.T) {
 		return &stubReader{err: stopErr}, nil
 	}
 
-	err := Run([]string{"keyklik", explicitDevice}, &bytes.Buffer{}, &bytes.Buffer{})
+	err := Run([]string{"keyklik", explicitDevice, "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("expected stop error, got %v", err)
 	}
@@ -404,7 +440,7 @@ func TestRun_DefaultKeyboardDeviceError_IsReturned(t *testing.T) {
 		return nil, nil
 	}
 
-	err := Run([]string{"keyklik"}, &bytes.Buffer{}, &bytes.Buffer{})
+	err := Run([]string{"keyklik", "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if !errors.Is(err, detectErr) {
 		t.Fatalf("expected detect error, got %v", err)
 	}
@@ -442,7 +478,7 @@ func TestRun_ModifierKey_UsesModifierClickPool(t *testing.T) {
 		}, nil
 	}
 
-	err := Run([]string{"keyklik", "--modifier-volume", "0.50", "--modifier-pitch", "2"}, &bytes.Buffer{}, &bytes.Buffer{})
+	err := Run([]string{"keyklik", "--foreground", "--modifier-volume", "0.50", "--modifier-pitch", "2"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("expected stop error, got %v", err)
 	}
@@ -489,7 +525,7 @@ func TestRun_KeyRepeatDoesNotPlayAgain(t *testing.T) {
 		}, nil
 	}
 
-	err := Run([]string{"keyklik"}, &bytes.Buffer{}, &bytes.Buffer{})
+	err := Run([]string{"keyklik", "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("expected stop error, got %v", err)
 	}
@@ -537,7 +573,7 @@ func TestRun_KeyUpAllowsNewClick(t *testing.T) {
 		}, nil
 	}
 
-	err := Run([]string{"keyklik"}, &bytes.Buffer{}, &bytes.Buffer{})
+	err := Run([]string{"keyklik", "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if !errors.Is(err, stopErr) {
 		t.Fatalf("expected stop error, got %v", err)
 	}

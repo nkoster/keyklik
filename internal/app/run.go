@@ -89,14 +89,15 @@ var (
 	}
 )
 
-func argsWithoutBackground(args []string) []string {
+func argsForBackgroundChild(args []string) []string {
 	filtered := make([]string, 0, len(args))
 	for _, arg := range args {
-		if arg == "--background" {
+		if arg == "--foreground" {
 			continue
 		}
 		filtered = append(filtered, arg)
 	}
+	filtered = append(filtered, "--foreground")
 	return filtered
 }
 
@@ -190,15 +191,17 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 		return err
 	}
 
-	if cfg.Background {
+	shouldBackground := !cfg.Stop && !cfg.Foreground
+
+	if shouldBackground {
 		pidFile := cfg.PIDFile
 		if pidFile == "" {
 			pidFile = defaultPIDFilePath()
 		}
 
-		childArgs := argsWithoutBackground(args)
+		childArgs := argsForBackgroundChild(args)
 		if len(childArgs) == 0 {
-			childArgs = []string{prog}
+			childArgs = []string{prog, "--foreground"}
 		}
 
 		pid, err := startDetachedProcess(childArgs[0], childArgs[1:])
