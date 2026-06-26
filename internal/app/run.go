@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,7 +42,71 @@ var (
 		return input.Open(devicePath)
 	}
 	defaultKeyboardDevice = config.DefaultKeyboardDevice
+	writePIDFile          = func(path string, pid int) error {
+		dir := filepath.Dir(path)
+		if dir != "" && dir != "." {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return err
+			}
+		}
+		return os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o644)
+	}
+	readPIDFile = func(path string) (int, error) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return 0, err
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil || pid <= 0 {
+			return 0, fmt.Errorf("invalid pid in %s", path)
+		}
+		return pid, nil
+	}
+	sendSignal = func(pid int, signal syscall.Signal) error {
+		return syscall.Kill(pid, signal)
+	}
+	removeFile = func(path string) error {
+		return os.Remove(path)
+	}
+	startDetachedProcess = func(path string, args []string) (int, error) {
+		devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+		if err != nil {
+			return 0, err
+		}
+		defer util.IgnoreErr(devNull.Close)
+
+		cmd := exec.Command(path, args...)
+		cmd.Stdin = devNull
+		cmd.Stdout = devNull
+		cmd.Stderr = devNull
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+		if err := cmd.Start(); err != nil {
+			return 0, err
+		}
+
+		return cmd.Process.Pid, nil
+	}
 )
+
+func argsWithoutBackground(args []string) []string {
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "--background" {
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return filtered
+}
+
+func defaultPIDFilePath() string {
+	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
+		return filepath.Join(runtimeDir, "keyklik.pid")
+	}
+
+	return filepath.Join(os.TempDir(), "keyklik.pid")
+}
 
 func programName(args []string) string {
 	if len(args) == 0 || args[0] == "" {
@@ -121,6 +188,53 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 
 		util.Ignore(fmt.Fprint(stderr, config.Usage(prog)))
 		return err
+	}
+
+	if cfg.Background {
+		pidFile := cfg.PIDFile
+		if pidFile == "" {
+			pidFile = defaultPIDFilePath()
+		}
+
+		childArgs := argsWithoutBackground(args)
+		if len(childArgs) == 0 {
+			childArgs = []string{prog}
+		}
+
+		pid, err := startDetachedProcess(childArgs[0], childArgs[1:])
+		if err != nil {
+			return fmt.Errorf("start background process: %w", err)
+		}
+		if err := writePIDFile(pidFile, pid); err != nil {
+			return fmt.Errorf("write pidfile: %w", err)
+		}
+
+		logf(stderr, "started in background with pid=%d", pid)
+		logf(stderr, "pid written to %s", pidFile)
+		return nil
+	}
+
+	if cfg.Stop {
+		pidFile := cfg.PIDFile
+		if pidFile == "" {
+			pidFile = defaultPIDFilePath()
+		}
+
+		pid, err := readPIDFile(pidFile)
+		if err != nil {
+			return fmt.Errorf("read pidfile: %w", err)
+		}
+
+		if err := sendSignal(pid, syscall.SIGTERM); err != nil {
+			return fmt.Errorf("stop process %d: %w", pid, err)
+		}
+
+		if err := removeFile(pidFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove pidfile: %w", err)
+		}
+
+		logf(stderr, "stopped process pid=%d", pid)
+		return nil
 	}
 
 	if cfg.KeyboardDevice == "" {

@@ -135,3 +135,38 @@ func TestParse_ModifierSettingsUseDedicatedDefaults(t *testing.T) {
 		t.Fatalf("expected modifier pitch %d, got %d", DefaultModifierPitch, cfg.ModifierPitch)
 	}
 }
+
+func TestParse_BackgroundFlag(t *testing.T) {
+	cfg, err := Parse([]string{"keyklik", "--background"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	if !cfg.Background {
+		t.Fatal("expected background mode to be enabled")
+	}
+}
+
+func TestParse_StopAndPIDFileFlags(t *testing.T) {
+	cfg, err := Parse([]string{"keyklik", "--stop", "--pidfile", "/tmp/keyklik.pid"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	if !cfg.Stop {
+		t.Fatal("expected stop mode to be enabled")
+	}
+	if cfg.PIDFile != "/tmp/keyklik.pid" {
+		t.Fatalf("expected pidfile %q, got %q", "/tmp/keyklik.pid", cfg.PIDFile)
+	}
+}
+
+func TestParse_BackgroundAndStopFlags_ReturnError(t *testing.T) {
+	_, err := Parse([]string{"keyklik", "--background", "--stop"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot be used together") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

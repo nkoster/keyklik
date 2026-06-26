@@ -27,6 +27,9 @@ type Config struct {
 	PitchLevel     int
 	ModifierVolume float64
 	ModifierPitch  int
+	Background     bool
+	PIDFile        string
+	Stop           bool
 }
 
 func Usage(program string) string {
@@ -34,17 +37,22 @@ func Usage(program string) string {
   %s [/dev/input/eventX] [volume 0.0-1.0 | pitch 1-5] [pitch 1-5]
   %s [/dev/input/eventX] [--volume 0.0-1.0] [--pitch 1-5]
   %s [/dev/input/eventX] [--volume=0.0-1.0] [--pitch=1-5]
-  %s [/dev/input/eventX] [--modifier-volume 0.0-1.0] [--modifier-pitch 1-5]
+  %s [/dev/input/eventX] [--modifier-volume 0.0-1.0] [--modifier-pitch 1-5] [--background] [--pidfile /path/to/keyklik.pid]
+  %s --stop [--pidfile /path/to/keyklik.pid]
 
 Examples:
   %s /dev/input/event3
   %s
-  %s /dev/input/event3 0.20
-  %s /dev/input/event3 5
-  %s /dev/input/event3 0.20 5
-  %s /dev/input/event3 --volume 0.20 --pitch 4
-  %s /dev/input/event3 --volume 0.20 --pitch 4 --modifier-volume 0.35 --modifier-pitch 2
-`, program, program, program, program, program, program, program, program, program, program, program)
+  %s 0.20
+  %s 5
+  %s 0.20 5
+  %s --volume 0.20 --pitch 4
+  %s --volume 0.20 --pitch 4 --modifier-volume 0.35 --modifier-pitch 2
+  %s --background
+  %s --stop
+  %s --background --pidfile /tmp/keyklik.pid
+  %s --stop --pidfile /tmp/keyklik.pid
+`, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program, program)
 }
 
 func Parse(args []string) (Config, error) {
@@ -145,9 +153,25 @@ func Parse(args []string) (Config, error) {
 				return cfg, err
 			}
 			flagModifierPitch = &p
+		case arg == "--background":
+			cfg.Background = true
+		case arg == "--pidfile":
+			if i+1 >= len(args) {
+				return cfg, fmt.Errorf("missing value for --pidfile")
+			}
+			cfg.PIDFile = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--pidfile="):
+			cfg.PIDFile = strings.TrimPrefix(arg, "--pidfile=")
+		case arg == "--stop":
+			cfg.Stop = true
 		default:
 			positional = append(positional, arg)
 		}
+	}
+
+	if cfg.Background && cfg.Stop {
+		return cfg, fmt.Errorf("--background and --stop cannot be used together")
 	}
 
 	if len(positional) > 2 {
