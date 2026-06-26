@@ -13,6 +13,17 @@ type stubClickPool struct{}
 func (s *stubClickPool) Play() error { return nil }
 func (s *stubClickPool) Close()      {}
 
+type countingClickPool struct {
+	plays int
+}
+
+func (s *countingClickPool) Play() error {
+	s.plays++
+	return nil
+}
+
+func (s *countingClickPool) Close() {}
+
 type stubReader struct {
 	err error
 }
@@ -22,6 +33,23 @@ func (s *stubReader) ReadEvent() (input.Event, error) {
 }
 
 func (s *stubReader) Close() error { return nil }
+
+type sequenceReader struct {
+	events []input.Event
+	next   int
+	err    error
+}
+
+func (s *sequenceReader) ReadEvent() (input.Event, error) {
+	if s.next < len(s.events) {
+		ev := s.events[s.next]
+		s.next++
+		return ev, nil
+	}
+	return input.Event{}, s.err
+}
+
+func (s *sequenceReader) Close() error { return nil }
 
 func TestRun_NoDeviceArg_UsesDefaultKeyboardDevice(t *testing.T) {
 	origNewClickPool := newClickPool
@@ -122,5 +150,49 @@ func TestRun_DefaultKeyboardDeviceError_IsReturned(t *testing.T) {
 	err := Run([]string{"keyklik"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if !errors.Is(err, detectErr) {
 		t.Fatalf("expected detect error, got %v", err)
+	}
+}
+
+func TestRun_ModifierKey_UsesModifierClickPool(t *testing.T) {
+	origNewClickPool := newClickPool
+	origOpenReader := openReader
+	origDefaultKeyboardDevice := defaultKeyboardDevice
+	defer func() {
+		newClickPool = origNewClickPool
+		openReader = origOpenReader
+		defaultKeyboardDevice = origDefaultKeyboardDevice
+	}()
+
+	stopErr := errors.New("stop loop")
+	regularPool := &countingClickPool{}
+	modifierPool := &countingClickPool{}
+	poolCall := 0
+
+	newClickPool = func(sampleRate int, volume float64, pitchLevel int, poolSize int) (clickPool, error) {
+		poolCall++
+		if poolCall == 1 {
+			return regularPool, nil
+		}
+		return modifierPool, nil
+	}
+	defaultKeyboardDevice = func() (string, error) {
+		return "/dev/input/by-path/platform-i8042-serio-0-event-kbd", nil
+	}
+	openReader = func(devicePath string) (eventReader, error) {
+		return &sequenceReader{
+			events: []input.Event{{Type: 0x01, Code: 42, Value: input.KeyDown}},
+			err:    stopErr,
+		}, nil
+	}
+
+	err := Run([]string{"keyklik", "--modifier-volume", "0.50", "--modifier-pitch", "2"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if !errors.Is(err, stopErr) {
+		t.Fatalf("expected stop error, got %v", err)
+	}
+	if regularPool.plays != 0 {
+		t.Fatalf("expected regular pool plays 0, got %d", regularPool.plays)
+	}
+	if modifierPool.plays != 1 {
+		t.Fatalf("expected modifier pool plays 1, got %d", modifierPool.plays)
 	}
 }

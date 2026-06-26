@@ -21,6 +21,12 @@ func TestParse_NoExtraArgs_UsesDefaultsWithoutDeviceError(t *testing.T) {
 	if cfg.PitchLevel != DefaultPitch {
 		t.Fatalf("expected default pitch %d, got %d", DefaultPitch, cfg.PitchLevel)
 	}
+	if cfg.ModifierVolume != DefaultModifierVolume {
+		t.Fatalf("expected default modifier volume %.2f, got %.2f", DefaultModifierVolume, cfg.ModifierVolume)
+	}
+	if cfg.ModifierPitch != DefaultModifierPitch {
+		t.Fatalf("expected default modifier pitch %d, got %d", DefaultModifierPitch, cfg.ModifierPitch)
+	}
 }
 
 func TestParse_SingleNumericArg_IsPositionalValue(t *testing.T) {
@@ -93,5 +99,39 @@ func TestParse_HelpArg(t *testing.T) {
 	_, err := Parse([]string{"keyklik", "--help"})
 	if !errors.Is(err, ErrHelp) {
 		t.Fatalf("expected ErrHelp, got %v", err)
+	}
+}
+
+func TestParse_ModifierFlagsOverrideDefaults(t *testing.T) {
+	cfg, err := Parse([]string{"keyklik", "--volume", "0.20", "--pitch", "4", "--modifier-volume", "0.35", "--modifier-pitch", "2"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	if cfg.Volume != 0.20 {
+		t.Fatalf("expected regular volume 0.20, got %.2f", cfg.Volume)
+	}
+	if cfg.PitchLevel != 4 {
+		t.Fatalf("expected regular pitch 4, got %d", cfg.PitchLevel)
+	}
+	if cfg.ModifierVolume != 0.35 {
+		t.Fatalf("expected modifier volume 0.35, got %.2f", cfg.ModifierVolume)
+	}
+	if cfg.ModifierPitch != 2 {
+		t.Fatalf("expected modifier pitch 2, got %d", cfg.ModifierPitch)
+	}
+}
+
+func TestParse_ModifierSettingsUseDedicatedDefaults(t *testing.T) {
+	cfg, err := Parse([]string{"keyklik", "--volume", "0.25", "--pitch", "5"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+
+	if cfg.ModifierVolume != DefaultModifierVolume {
+		t.Fatalf("expected modifier volume %.2f, got %.2f", DefaultModifierVolume, cfg.ModifierVolume)
+	}
+	if cfg.ModifierPitch != DefaultModifierPitch {
+		t.Fatalf("expected modifier pitch %d, got %d", DefaultModifierPitch, cfg.ModifierPitch)
 	}
 }

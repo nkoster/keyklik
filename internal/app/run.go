@@ -57,11 +57,17 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 		cfg.KeyboardDevice = device
 	}
 
-	clickPool, err := newClickPool(config.SampleRate, cfg.Volume, cfg.PitchLevel, playerPoolSize)
+	regularClickPool, err := newClickPool(config.SampleRate, cfg.Volume, cfg.PitchLevel, playerPoolSize)
 	if err != nil {
 		return err
 	}
-	defer clickPool.Close()
+	defer regularClickPool.Close()
+
+	modifierClickPool, err := newClickPool(config.SampleRate, cfg.ModifierVolume, cfg.ModifierPitch, playerPoolSize)
+	if err != nil {
+		return err
+	}
+	defer modifierClickPool.Close()
 
 	reader, err := openReader(cfg.KeyboardDevice)
 	if err != nil {
@@ -70,7 +76,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 	defer reader.Close()
 
 	log.Printf("listening on %s", cfg.KeyboardDevice)
-	log.Printf("click config: sample rate %d, volume %.2f, pitch level %d", config.SampleRate, cfg.Volume, cfg.PitchLevel)
+	log.Printf("click config: sample rate %d, regular volume %.2f, regular pitch level %d, modifier volume %.2f, modifier pitch level %d", config.SampleRate, cfg.Volume, cfg.PitchLevel, cfg.ModifierVolume, cfg.ModifierPitch)
 
 	pressedKeys := make(map[uint16]bool)
 	lastClick := time.Time{}
@@ -105,7 +111,12 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 		}
 		lastClick = now
 
-		if err := clickPool.Play(); err != nil {
+		pool := regularClickPool
+		if input.IsModifierKey(ev.Code) {
+			pool = modifierClickPool
+		}
+
+		if err := pool.Play(); err != nil {
 			log.Printf("play click failed: %v", err)
 		}
 	}

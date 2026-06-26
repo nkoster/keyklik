@@ -10,11 +10,13 @@ import (
 )
 
 const (
-	DefaultVolume = 0.30
-	DefaultPitch  = 3
-	SampleRate    = 48000
-	byPathDir     = "/dev/input/by-path"
-	preferredKbd  = "platform-i8042-serio-0-event-kbd"
+	DefaultVolume         = 0.30
+	DefaultPitch          = 3
+	DefaultModifierVolume = 0.17
+	DefaultModifierPitch  = 4
+	SampleRate            = 48000
+	byPathDir             = "/dev/input/by-path"
+	preferredKbd          = "platform-i8042-serio-0-event-kbd"
 )
 
 var ErrHelp = errors.New("help requested")
@@ -23,6 +25,8 @@ type Config struct {
 	KeyboardDevice string
 	Volume         float64
 	PitchLevel     int
+	ModifierVolume float64
+	ModifierPitch  int
 }
 
 func Usage(program string) string {
@@ -30,6 +34,7 @@ func Usage(program string) string {
   %s [/dev/input/eventX] [volume 0.0-1.0 | pitch 1-5] [pitch 1-5]
   %s [/dev/input/eventX] [--volume 0.0-1.0] [--pitch 1-5]
   %s [/dev/input/eventX] [--volume=0.0-1.0] [--pitch=1-5]
+  %s [/dev/input/eventX] [--modifier-volume 0.0-1.0] [--modifier-pitch 1-5]
 
 Examples:
   %s /dev/input/event3
@@ -38,13 +43,16 @@ Examples:
   %s /dev/input/event3 5
   %s /dev/input/event3 0.20 5
   %s /dev/input/event3 --volume 0.20 --pitch 4
-`, program, program, program, program, program, program, program, program, program)
+  %s /dev/input/event3 --volume 0.20 --pitch 4 --modifier-volume 0.35 --modifier-pitch 2
+`, program, program, program, program, program, program, program, program, program, program, program)
 }
 
 func Parse(args []string) (Config, error) {
 	cfg := Config{
-		Volume:     DefaultVolume,
-		PitchLevel: DefaultPitch,
+		Volume:         DefaultVolume,
+		PitchLevel:     DefaultPitch,
+		ModifierVolume: DefaultModifierVolume,
+		ModifierPitch:  DefaultModifierPitch,
 	}
 
 	if len(args) == 0 {
@@ -63,6 +71,8 @@ func Parse(args []string) (Config, error) {
 
 	var flagVolume *float64
 	var flagPitch *int
+	var flagModifierVolume *float64
+	var flagModifierPitch *int
 	positional := make([]string, 0, 2)
 
 	for i := start; i < len(args); i++ {
@@ -103,6 +113,38 @@ func Parse(args []string) (Config, error) {
 				return cfg, err
 			}
 			flagPitch = &p
+		case arg == "--modifier-volume":
+			if i+1 >= len(args) {
+				return cfg, fmt.Errorf("missing value for --modifier-volume")
+			}
+			v, err := parseVolume(args[i+1])
+			if err != nil {
+				return cfg, err
+			}
+			flagModifierVolume = &v
+			i++
+		case strings.HasPrefix(arg, "--modifier-volume="):
+			v, err := parseVolume(strings.TrimPrefix(arg, "--modifier-volume="))
+			if err != nil {
+				return cfg, err
+			}
+			flagModifierVolume = &v
+		case arg == "--modifier-pitch":
+			if i+1 >= len(args) {
+				return cfg, fmt.Errorf("missing value for --modifier-pitch")
+			}
+			p, err := parsePitch(args[i+1])
+			if err != nil {
+				return cfg, err
+			}
+			flagModifierPitch = &p
+			i++
+		case strings.HasPrefix(arg, "--modifier-pitch="):
+			p, err := parsePitch(strings.TrimPrefix(arg, "--modifier-pitch="))
+			if err != nil {
+				return cfg, err
+			}
+			flagModifierPitch = &p
 		default:
 			positional = append(positional, arg)
 		}
@@ -142,6 +184,13 @@ func Parse(args []string) (Config, error) {
 	}
 	if flagPitch != nil {
 		cfg.PitchLevel = *flagPitch
+	}
+
+	if flagModifierVolume != nil {
+		cfg.ModifierVolume = *flagModifierVolume
+	}
+	if flagModifierPitch != nil {
+		cfg.ModifierPitch = *flagModifierPitch
 	}
 
 	return cfg, nil

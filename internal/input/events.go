@@ -11,6 +11,15 @@ const (
 
 	KeyUp   = 0
 	KeyDown = 1
+
+	keyLeftCtrl   = 29
+	keyLeftShift  = 42
+	keyCapsLock   = 58
+	keyNumLock    = 69
+	keyLeftAlt    = 56
+	keyRightShift = 54
+	keyRightCtrl  = 97
+	keyRightAlt   = 100
 )
 
 type TimeVal struct {
@@ -54,4 +63,16 @@ func (r *Reader) ReadEvent() (Event, error) {
 
 func IsKeyboardEvent(ev Event) bool {
 	return ev.Type == evKey
+}
+
+func IsModifierKey(code uint16) bool {
+	switch code {
+	case keyLeftCtrl, keyRightCtrl,
+		keyLeftShift, keyRightShift,
+		keyLeftAlt, keyRightAlt,
+		keyCapsLock, keyNumLock:
+		return true
+	default:
+		return false
+	}
 }
