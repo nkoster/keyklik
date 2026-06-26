@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/hajimehoshi/oto/v2"
@@ -22,10 +24,49 @@ type ClickPool struct {
 	next    int
 }
 
+func sudoInvokingUserRuntimeDir(getenv func(string) string, euid int) (string, bool) {
+	if euid != 0 {
+		return "", false
+	}
+
+	uidRaw := getenv("SUDO_UID")
+	if uidRaw == "" {
+		return "", false
+	}
+
+	uid, err := strconv.Atoi(uidRaw)
+	if err != nil || uid <= 0 {
+		return "", false
+	}
+
+	return fmt.Sprintf("/run/user/%d", uid), true
+}
+
+func SudoUserAudioSessionRuntimeDir() (string, bool) {
+	return sudoInvokingUserRuntimeDir(os.Getenv, os.Geteuid())
+}
+
+func configureSudoUserAudioSessionEnv() {
+	runtimeDir, ok := SudoUserAudioSessionRuntimeDir()
+	if !ok {
+		return
+	}
+
+	if os.Getenv("XDG_RUNTIME_DIR") == "" {
+		_ = os.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	}
+
+	if os.Getenv("PULSE_SERVER") == "" {
+		_ = os.Setenv("PULSE_SERVER", "unix:"+runtimeDir+"/pulse/native")
+	}
+}
+
 func NewClickPool(sampleRate int, volume float64, pitchLevel int, poolSize int) (*ClickPool, error) {
 	if poolSize < 1 {
 		return nil, fmt.Errorf("pool size must be >= 1")
 	}
+
+	configureSudoUserAudioSessionEnv()
 
 	pcm := generateClickPCM(sampleRate, volume, pitchLevel)
 	ctx, ready, err := oto.NewContext(sampleRate, 2, 2)
