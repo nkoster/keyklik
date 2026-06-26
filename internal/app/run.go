@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"time"
 
 	"keyklik/internal/audio"
@@ -38,15 +37,28 @@ var (
 	defaultKeyboardDevice = config.DefaultKeyboardDevice
 )
 
+func programName(args []string) string {
+	if len(args) == 0 || args[0] == "" {
+		return "keyklik"
+	}
+	return args[0]
+}
+
+func logf(w io.Writer, format string, args ...any) {
+	util.Ignore(fmt.Fprintf(w, format+"\n", args...))
+}
+
 func Run(args []string, stdout io.Writer, stderr io.Writer) error {
+	prog := programName(args)
+
 	cfg, err := config.Parse(args)
 	if err != nil {
 		if errors.Is(err, config.ErrHelp) {
-			util.Ignore(fmt.Fprint(stdout, config.Usage(args[0])))
+			util.Ignore(fmt.Fprint(stdout, config.Usage(prog)))
 			return nil
 		}
 
-		util.Ignore(fmt.Fprint(stderr, config.Usage(args[0])))
+		util.Ignore(fmt.Fprint(stderr, config.Usage(prog)))
 		return err
 	}
 
@@ -76,8 +88,8 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 	defer util.IgnoreErr(reader.Close)
 
-	log.Printf("listening on %s", cfg.KeyboardDevice)
-	log.Printf("click config: regular volume %.2f, regular pitch level %d, modifier volume %.2f, modifier pitch level %d", cfg.Volume, cfg.PitchLevel, cfg.ModifierVolume, cfg.ModifierPitch)
+	logf(stderr, "listening on %s", cfg.KeyboardDevice)
+	logf(stderr, "click config: regular volume %.2f, regular pitch level %d, modifier volume %.2f, modifier pitch level %d", cfg.Volume, cfg.PitchLevel, cfg.ModifierVolume, cfg.ModifierPitch)
 
 	pressedKeys := make(map[uint16]bool)
 	lastClick := time.Time{}
@@ -118,7 +130,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 		}
 
 		if err := pool.Play(); err != nil {
-			log.Printf("play click failed: %v", err)
+			logf(stderr, "play click failed: %v", err)
 		}
 	}
 }
