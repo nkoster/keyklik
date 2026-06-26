@@ -27,6 +27,7 @@ type TimeVal struct {
 	Usec int64
 }
 
+// Event matches Linux input_event on 64-bit Linux.
 type Event struct {
 	Time  TimeVal
 	Type  uint16
