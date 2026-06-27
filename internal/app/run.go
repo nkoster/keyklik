@@ -120,6 +120,11 @@ func logf(w io.Writer, format string, args ...any) {
 	util.Ignore(fmt.Fprintf(w, format+"\n", args...))
 }
 
+func logStartupInfo(w io.Writer, cfg config.Config) {
+	logf(w, "listening on %s", cfg.KeyboardDevice)
+	logf(w, "click config: regular volume %.2f, regular pitch level %d, modifier volume %.2f, modifier pitch level %d", cfg.Volume, cfg.PitchLevel, cfg.ModifierVolume, cfg.ModifierPitch)
+}
+
 func sudoInvokingUserIDs(getenv func(string) string, euid int) (int, int, bool) {
 	if euid != 0 {
 		return 0, 0, false
@@ -193,11 +198,25 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 
 	shouldBackground := !cfg.Stop && !cfg.Foreground
 
+	if !cfg.Stop && cfg.KeyboardDevice == "" {
+		device, err := defaultKeyboardDevice()
+		if err != nil {
+			return err
+		}
+		cfg.KeyboardDevice = device
+	}
+
 	if shouldBackground {
 		pidFile := cfg.PIDFile
 		if pidFile == "" {
 			pidFile = defaultPIDFilePath()
 		}
+
+		if uid, gid, ok := sudoInvokingUserIDs(os.Getenv, os.Geteuid()); ok {
+			logf(stderr, "sudo detected: dropped privileges to uid=%d gid=%d for audio compatibility", uid, gid)
+		}
+
+		logStartupInfo(stderr, cfg)
 
 		childArgs := argsForBackgroundChild(args)
 		if len(childArgs) == 0 {
@@ -240,14 +259,6 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 		return nil
 	}
 
-	if cfg.KeyboardDevice == "" {
-		device, err := defaultKeyboardDevice()
-		if err != nil {
-			return err
-		}
-		cfg.KeyboardDevice = device
-	}
-
 	reader, err := openReader(cfg.KeyboardDevice)
 	if err != nil {
 		return err
@@ -274,8 +285,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 	defer modifierClickPool.Close()
 
-	logf(stderr, "listening on %s", cfg.KeyboardDevice)
-	logf(stderr, "click config: regular volume %.2f, regular pitch level %d, modifier volume %.2f, modifier pitch level %d", cfg.Volume, cfg.PitchLevel, cfg.ModifierVolume, cfg.ModifierPitch)
+	logStartupInfo(stderr, cfg)
 
 	pressedKeys := make(map[uint16]bool)
 	lastClick := time.Time{}

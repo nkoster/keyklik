@@ -16,9 +16,11 @@ type stubClickPool struct{}
 func TestRun_DefaultMode_StartsBackgroundProcess(t *testing.T) {
 	origStartDetachedProcess := startDetachedProcess
 	origWritePIDFile := writePIDFile
+	origDefaultKeyboardDevice := defaultKeyboardDevice
 	defer func() {
 		startDetachedProcess = origStartDetachedProcess
 		writePIDFile = origWritePIDFile
+		defaultKeyboardDevice = origDefaultKeyboardDevice
 	}()
 
 	var startedPath string
@@ -33,8 +35,12 @@ func TestRun_DefaultMode_StartsBackgroundProcess(t *testing.T) {
 		pidfilePath = path
 		return nil
 	}
+	defaultKeyboardDevice = func() (string, error) {
+		return "/dev/input/by-path/platform-i8042-serio-0-event-kbd", nil
+	}
 
-	err := Run([]string{"keyklik"}, &bytes.Buffer{}, &bytes.Buffer{})
+	var stderr bytes.Buffer
+	err := Run([]string{"keyklik"}, &bytes.Buffer{}, &stderr)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -46,6 +52,9 @@ func TestRun_DefaultMode_StartsBackgroundProcess(t *testing.T) {
 	}
 	if pidfilePath == "" {
 		t.Fatal("expected default pidfile path to be used")
+	}
+	if !strings.Contains(stderr.String(), "listening on /dev/input/by-path/platform-i8042-serio-0-event-kbd") {
+		t.Fatalf("expected startup listening log, got %q", stderr.String())
 	}
 }
 
@@ -173,8 +182,7 @@ func TestRun_DefaultBackground_StartsDetachedProcessAndReturns(t *testing.T) {
 		return nil, nil
 	}
 	defaultKeyboardDevice = func() (string, error) {
-		t.Fatal("defaultKeyboardDevice should not be called in background mode")
-		return "", nil
+		return "/dev/input/by-path/platform-i8042-serio-0-event-kbd", nil
 	}
 	openReader = func(devicePath string) (eventReader, error) {
 		t.Fatal("openReader should not be called in background mode")
@@ -224,6 +232,12 @@ func TestRun_DefaultBackground_StartsDetachedProcessAndReturns(t *testing.T) {
 	if !strings.Contains(stderr.String(), "pid written to ") {
 		t.Fatalf("expected pidfile log, got %q", stderr.String())
 	}
+	if !strings.Contains(stderr.String(), "listening on /dev/input/event9") {
+		t.Fatalf("expected startup listening log, got %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "click config: regular volume 0.20") {
+		t.Fatalf("expected startup click config log, got %q", stderr.String())
+	}
 }
 
 func TestRun_DefaultBackground_WithPIDFile_WritesPID(t *testing.T) {
@@ -245,8 +259,7 @@ func TestRun_DefaultBackground_WithPIDFile_WritesPID(t *testing.T) {
 		return nil, nil
 	}
 	defaultKeyboardDevice = func() (string, error) {
-		t.Fatal("defaultKeyboardDevice should not be called in background mode")
-		return "", nil
+		return "/dev/input/by-path/platform-i8042-serio-0-event-kbd", nil
 	}
 	openReader = func(devicePath string) (eventReader, error) {
 		t.Fatal("openReader should not be called in background mode")
