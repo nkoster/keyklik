@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"errors"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -12,6 +13,14 @@ import (
 )
 
 type stubClickPool struct{}
+
+func TestMain(m *testing.M) {
+	origGetEffectiveUID := getEffectiveUID
+	getEffectiveUID = func() int { return 0 }
+	code := m.Run()
+	getEffectiveUID = origGetEffectiveUID
+	os.Exit(code)
+}
 
 func TestRun_DefaultMode_StartsBackgroundProcess(t *testing.T) {
 	origStartDetachedProcess := startDetachedProcess
@@ -429,6 +438,52 @@ func TestRun_StopWithoutPIDFile_UsesDefaultPIDFile(t *testing.T) {
 	}
 	if gotReadPath == "" {
 		t.Fatal("expected default pidfile path to be used")
+	}
+}
+
+func TestRun_StartWithoutRoot_ReturnsPrivilegeError(t *testing.T) {
+	origGetEffectiveUID := getEffectiveUID
+	origDefaultKeyboardDevices := defaultKeyboardDevices
+	defer func() {
+		getEffectiveUID = origGetEffectiveUID
+		defaultKeyboardDevices = origDefaultKeyboardDevices
+	}()
+
+	getEffectiveUID = func() int { return 1000 }
+	defaultKeyboardDevices = func() ([]string, error) {
+		t.Fatal("defaultKeyboardDevices should not be called when privileges are insufficient")
+		return nil, nil
+	}
+
+	err := Run([]string{"keyklik", "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected privilege error, got nil")
+	}
+	if !strings.Contains(err.Error(), "insufficient privileges to start keyklik") {
+		t.Fatalf("expected start privilege error, got %v", err)
+	}
+}
+
+func TestRun_StopWithoutRoot_ReturnsPrivilegeError(t *testing.T) {
+	origGetEffectiveUID := getEffectiveUID
+	origReadPIDFile := readPIDFile
+	defer func() {
+		getEffectiveUID = origGetEffectiveUID
+		readPIDFile = origReadPIDFile
+	}()
+
+	getEffectiveUID = func() int { return 1000 }
+	readPIDFile = func(path string) (int, error) {
+		t.Fatal("readPIDFile should not be called when privileges are insufficient")
+		return 0, nil
+	}
+
+	err := Run([]string{"keyklik", "--stop"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected privilege error, got nil")
+	}
+	if !strings.Contains(err.Error(), "insufficient privileges to stop keyklik") {
+		t.Fatalf("expected stop privilege error, got %v", err)
 	}
 }
 
