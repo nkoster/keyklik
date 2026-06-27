@@ -85,6 +85,28 @@ func TestSelectKeyboardDeviceName_FallsBackToFirstKbd(t *testing.T) {
 	}
 }
 
+func TestSelectKeyboardDeviceNames_PrefersBuiltInThenAddsOtherKeyboards(t *testing.T) {
+	names, err := selectKeyboardDeviceNames([]string{
+		"pci-0000:00:14.0-usb-0:13.4:1.0-event-kbd",
+		"mouse0",
+		preferredKbd,
+		"platform-PNP0C14:02-event",
+	})
+	if err != nil {
+		t.Fatalf("selectKeyboardDeviceNames returned error: %v", err)
+	}
+
+	if len(names) != 2 {
+		t.Fatalf("expected 2 keyboard names, got %d (%v)", len(names), names)
+	}
+	if names[0] != preferredKbd {
+		t.Fatalf("expected preferred keyboard first, got %q", names[0])
+	}
+	if names[1] != "pci-0000:00:14.0-usb-0:13.4:1.0-event-kbd" {
+		t.Fatalf("expected second keyboard device to be usb keyboard, got %q", names[1])
+	}
+}
+
 func TestSelectKeyboardDeviceName_NoKeyboardEntry(t *testing.T) {
 	_, err := selectKeyboardDeviceName([]string{"mouse0", "touchpad0"})
 	if err == nil {

@@ -38,11 +38,12 @@ var (
 	newClickPool = func(sampleRate int, volume float64, pitchLevel int, poolSize int) (clickPool, error) {
 		return audio.NewClickPool(sampleRate, volume, pitchLevel, poolSize)
 	}
-	openReader = func(devicePath string) (eventReader, error) {
+	getEffectiveUID = os.Geteuid
+	openReader      = func(devicePath string) (eventReader, error) {
 		return input.Open(devicePath)
 	}
-	defaultKeyboardDevice = config.DefaultKeyboardDevice
-	writePIDFile          = func(path string, pid int) error {
+	defaultKeyboardDevices = config.DefaultKeyboardDevices
+	writePIDFile           = func(path string, pid int) error {
 		dir := filepath.Dir(path)
 		if dir != "" && dir != "." {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -120,9 +121,53 @@ func logf(w io.Writer, format string, args ...any) {
 	util.Ignore(fmt.Fprintf(w, format+"\n", args...))
 }
 
-func logStartupInfo(w io.Writer, cfg config.Config) {
-	logf(w, "listening on %s", cfg.KeyboardDevice)
+func logStartupInfo(w io.Writer, cfg config.Config, keyboardDevices []string) {
+	for _, devicePath := range keyboardDevices {
+		logf(w, "listening on %s", devicePath)
+	}
 	logf(w, "click config: regular volume %.2f, regular pitch level %d, modifier volume %.2f, modifier pitch level %d", cfg.Volume, cfg.PitchLevel, cfg.ModifierVolume, cfg.ModifierPitch)
+}
+
+type sourcedEvent struct {
+	devicePath string
+	event      input.Event
+	err        error
+}
+
+func openReaders(devicePaths []string) ([]eventReader, error) {
+	readers := make([]eventReader, 0, len(devicePaths))
+	for _, devicePath := range devicePaths {
+		reader, err := openReader(devicePath)
+		if err != nil {
+			for _, openedReader := range readers {
+				util.IgnoreErr(openedReader.Close)
+			}
+			return nil, err
+		}
+		readers = append(readers, reader)
+	}
+
+	return readers, nil
+}
+
+func readEventsFromAll(devicePaths []string, readers []eventReader) <-chan sourcedEvent {
+	events := make(chan sourcedEvent)
+
+	for idx, reader := range readers {
+		devicePath := devicePaths[idx]
+		go func(path string, r eventReader) {
+			for {
+				ev, err := r.ReadEvent()
+				if err != nil {
+					events <- sourcedEvent{devicePath: path, err: err}
+					return
+				}
+				events <- sourcedEvent{devicePath: path, event: ev}
+			}
+		}(devicePath, reader)
+	}
+
+	return events
 }
 
 func sudoInvokingUserIDs(getenv func(string) string, euid int) (int, int, bool) {
@@ -182,6 +227,19 @@ func maybeDropSudoPrivileges() (int, int, bool, error) {
 	return uid, gid, true, nil
 }
 
+func requirePrivileges(stopMode bool) error {
+	if getEffectiveUID() == 0 {
+		return nil
+	}
+
+	action := "start"
+	if stopMode {
+		action = "stop"
+	}
+
+	return fmt.Errorf("insufficient privileges to %s keyklik: run as root or with sudo", action)
+}
+
 func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 	prog := programName(args)
 
@@ -196,14 +254,24 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 		return err
 	}
 
-	shouldBackground := !cfg.Stop && !cfg.Foreground
+	if err := requirePrivileges(cfg.Stop); err != nil {
+		return err
+	}
 
-	if !cfg.Stop && cfg.KeyboardDevice == "" {
-		device, err := defaultKeyboardDevice()
-		if err != nil {
-			return err
+	shouldBackground := !cfg.Stop && !cfg.Foreground
+	keyboardDevices := make([]string, 0, 1)
+
+	if !cfg.Stop {
+		if cfg.KeyboardDevice != "" {
+			keyboardDevices = append(keyboardDevices, cfg.KeyboardDevice)
+		} else {
+			devices, err := defaultKeyboardDevices()
+			if err != nil {
+				return err
+			}
+			keyboardDevices = append(keyboardDevices, devices...)
 		}
-		cfg.KeyboardDevice = device
+		cfg.KeyboardDevice = keyboardDevices[0]
 	}
 
 	if shouldBackground {
@@ -216,7 +284,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 			logf(stderr, "sudo detected: dropped privileges to uid=%d gid=%d for audio compatibility", uid, gid)
 		}
 
-		logStartupInfo(stderr, cfg)
+		logStartupInfo(stderr, cfg, keyboardDevices)
 
 		childArgs := argsForBackgroundChild(args)
 		if len(childArgs) == 0 {
@@ -259,11 +327,13 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 		return nil
 	}
 
-	reader, err := openReader(cfg.KeyboardDevice)
+	readers, err := openReaders(keyboardDevices)
 	if err != nil {
 		return err
 	}
-	defer util.IgnoreErr(reader.Close)
+	for _, reader := range readers {
+		defer util.IgnoreErr(reader.Close)
+	}
 
 	uid, gid, dropped, err := maybeDropSudoPrivileges()
 	if err != nil {
@@ -285,23 +355,31 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 	defer modifierClickPool.Close()
 
-	logStartupInfo(stderr, cfg)
+	logStartupInfo(stderr, cfg, keyboardDevices)
 
-	pressedKeys := make(map[uint16]bool)
+	pressedKeys := make(map[string]map[uint16]bool)
 	lastClick := time.Time{}
+	events := readEventsFromAll(keyboardDevices, readers)
 
 	for {
-		ev, err := reader.ReadEvent()
-		if err != nil {
-			return err
+		sourceEvent := <-events
+		if sourceEvent.err != nil {
+			return sourceEvent.err
 		}
+		ev := sourceEvent.event
 
 		if !input.IsKeyboardEvent(ev) {
 			continue
 		}
 
+		devicePressed, ok := pressedKeys[sourceEvent.devicePath]
+		if !ok {
+			devicePressed = make(map[uint16]bool)
+			pressedKeys[sourceEvent.devicePath] = devicePressed
+		}
+
 		if ev.Value == input.KeyUp {
-			delete(pressedKeys, ev.Code)
+			delete(devicePressed, ev.Code)
 			continue
 		}
 
@@ -309,10 +387,10 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 			continue
 		}
 
-		if pressedKeys[ev.Code] {
+		if devicePressed[ev.Code] {
 			continue
 		}
-		pressedKeys[ev.Code] = true
+		devicePressed[ev.Code] = true
 
 		now := time.Now()
 		if now.Sub(lastClick) < minClickGap {

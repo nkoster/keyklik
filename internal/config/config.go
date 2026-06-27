@@ -259,9 +259,18 @@ func isDeviceArg(arg string) bool {
 }
 
 func defaultKeyboardDevice() (string, error) {
+	devices, err := defaultKeyboardDevices()
+	if err != nil {
+		return "", err
+	}
+
+	return devices[0], nil
+}
+
+func defaultKeyboardDevices() ([]string, error) {
 	entries, err := os.ReadDir(byPathDir)
 	if err != nil {
-		return "", fmt.Errorf("detect default keyboard device: %w", err)
+		return nil, fmt.Errorf("detect default keyboard device: %w", err)
 	}
 
 	names := make([]string, 0, len(entries))
@@ -269,30 +278,62 @@ func defaultKeyboardDevice() (string, error) {
 		names = append(names, entry.Name())
 	}
 
-	name, err := selectKeyboardDeviceName(names)
+	selectedNames, err := selectKeyboardDeviceNames(names)
+	if err != nil {
+		return nil, err
+	}
+
+	devicePaths := make([]string, 0, len(selectedNames))
+	for _, name := range selectedNames {
+		devicePaths = append(devicePaths, filepath.Join(byPathDir, name))
+	}
+
+	return devicePaths, nil
+}
+
+func selectKeyboardDeviceNames(names []string) ([]string, error) {
+	selected := make([]string, 0, len(names))
+
+	hasPreferred := false
+	for _, name := range names {
+		if name == preferredKbd {
+			hasPreferred = true
+			break
+		}
+	}
+	if hasPreferred {
+		selected = append(selected, preferredKbd)
+	}
+
+	for _, name := range names {
+		if name == preferredKbd {
+			continue
+		}
+		if strings.Contains(name, "kbd") {
+			selected = append(selected, name)
+		}
+	}
+
+	if len(selected) > 0 {
+		return selected, nil
+	}
+
+	return nil, fmt.Errorf("detect default keyboard device: no entry containing \"kbd\" found in %s", byPathDir)
+}
+
+func selectKeyboardDeviceName(names []string) (string, error) {
+	selected, err := selectKeyboardDeviceNames(names)
 	if err != nil {
 		return "", err
 	}
 
-	return filepath.Join(byPathDir, name), nil
-}
-
-func selectKeyboardDeviceName(names []string) (string, error) {
-	for _, name := range names {
-		if name == preferredKbd {
-			return name, nil
-		}
-	}
-
-	for _, name := range names {
-		if strings.Contains(name, "kbd") {
-			return name, nil
-		}
-	}
-
-	return "", fmt.Errorf("detect default keyboard device: no entry containing \"kbd\" found in %s", byPathDir)
+	return selected[0], nil
 }
 
 func DefaultKeyboardDevice() (string, error) {
 	return defaultKeyboardDevice()
+}
+
+func DefaultKeyboardDevices() ([]string, error) {
+	return defaultKeyboardDevices()
 }

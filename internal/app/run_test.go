@@ -16,11 +16,11 @@ type stubClickPool struct{}
 func TestRun_DefaultMode_StartsBackgroundProcess(t *testing.T) {
 	origStartDetachedProcess := startDetachedProcess
 	origWritePIDFile := writePIDFile
-	origDefaultKeyboardDevice := defaultKeyboardDevice
+	origDefaultKeyboardDevices := defaultKeyboardDevices
 	defer func() {
 		startDetachedProcess = origStartDetachedProcess
 		writePIDFile = origWritePIDFile
-		defaultKeyboardDevice = origDefaultKeyboardDevice
+		defaultKeyboardDevices = origDefaultKeyboardDevices
 	}()
 
 	var startedPath string
@@ -35,8 +35,8 @@ func TestRun_DefaultMode_StartsBackgroundProcess(t *testing.T) {
 		pidfilePath = path
 		return nil
 	}
-	defaultKeyboardDevice = func() (string, error) {
-		return "/dev/input/by-path/platform-i8042-serio-0-event-kbd", nil
+	defaultKeyboardDevices = func() ([]string, error) {
+		return []string{"/dev/input/by-path/platform-i8042-serio-0-event-kbd"}, nil
 	}
 
 	var stderr bytes.Buffer
@@ -127,11 +127,11 @@ func (s *timedSequenceReader) Close() error { return nil }
 func TestRun_NoDeviceArg_UsesDefaultKeyboardDevice(t *testing.T) {
 	origNewClickPool := newClickPool
 	origOpenReader := openReader
-	origDefaultKeyboardDevice := defaultKeyboardDevice
+	origDefaultKeyboardDevices := defaultKeyboardDevices
 	defer func() {
 		newClickPool = origNewClickPool
 		openReader = origOpenReader
-		defaultKeyboardDevice = origDefaultKeyboardDevice
+		defaultKeyboardDevices = origDefaultKeyboardDevices
 	}()
 
 	stopErr := errors.New("stop loop")
@@ -141,8 +141,8 @@ func TestRun_NoDeviceArg_UsesDefaultKeyboardDevice(t *testing.T) {
 	newClickPool = func(sampleRate int, volume float64, pitchLevel int, poolSize int) (clickPool, error) {
 		return &stubClickPool{}, nil
 	}
-	defaultKeyboardDevice = func() (string, error) {
-		return detectedDevice, nil
+	defaultKeyboardDevices = func() ([]string, error) {
+		return []string{detectedDevice}, nil
 	}
 	openReader = func(devicePath string) (eventReader, error) {
 		openedPath = devicePath
@@ -158,16 +158,57 @@ func TestRun_NoDeviceArg_UsesDefaultKeyboardDevice(t *testing.T) {
 	}
 }
 
+func TestRun_NoDeviceArg_OpensAllDefaultKeyboardDevices(t *testing.T) {
+	origNewClickPool := newClickPool
+	origOpenReader := openReader
+	origDefaultKeyboardDevices := defaultKeyboardDevices
+	defer func() {
+		newClickPool = origNewClickPool
+		openReader = origOpenReader
+		defaultKeyboardDevices = origDefaultKeyboardDevices
+	}()
+
+	stopErr := errors.New("stop loop")
+	firstDevice := "/dev/input/by-path/platform-i8042-serio-0-event-kbd"
+	secondDevice := "/dev/input/by-path/pci-0000:00:14.0-usb-0:13.4:1.0-event-kbd"
+	openedPaths := make([]string, 0, 2)
+
+	newClickPool = func(sampleRate int, volume float64, pitchLevel int, poolSize int) (clickPool, error) {
+		return &stubClickPool{}, nil
+	}
+	defaultKeyboardDevices = func() ([]string, error) {
+		return []string{firstDevice, secondDevice}, nil
+	}
+	openReader = func(devicePath string) (eventReader, error) {
+		openedPaths = append(openedPaths, devicePath)
+		return &stubReader{err: stopErr}, nil
+	}
+
+	err := Run([]string{"keyklik", "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if !errors.Is(err, stopErr) {
+		t.Fatalf("expected stop error, got %v", err)
+	}
+	if len(openedPaths) != 2 {
+		t.Fatalf("expected 2 opened paths, got %d (%v)", len(openedPaths), openedPaths)
+	}
+	if openedPaths[0] != firstDevice {
+		t.Fatalf("expected first open path %q, got %q", firstDevice, openedPaths[0])
+	}
+	if openedPaths[1] != secondDevice {
+		t.Fatalf("expected second open path %q, got %q", secondDevice, openedPaths[1])
+	}
+}
+
 func TestRun_DefaultBackground_StartsDetachedProcessAndReturns(t *testing.T) {
 	origNewClickPool := newClickPool
 	origOpenReader := openReader
-	origDefaultKeyboardDevice := defaultKeyboardDevice
+	origDefaultKeyboardDevices := defaultKeyboardDevices
 	origStartDetachedProcess := startDetachedProcess
 	origWritePIDFile := writePIDFile
 	defer func() {
 		newClickPool = origNewClickPool
 		openReader = origOpenReader
-		defaultKeyboardDevice = origDefaultKeyboardDevice
+		defaultKeyboardDevices = origDefaultKeyboardDevices
 		startDetachedProcess = origStartDetachedProcess
 		writePIDFile = origWritePIDFile
 	}()
@@ -181,8 +222,8 @@ func TestRun_DefaultBackground_StartsDetachedProcessAndReturns(t *testing.T) {
 		t.Fatal("newClickPool should not be called in background mode")
 		return nil, nil
 	}
-	defaultKeyboardDevice = func() (string, error) {
-		return "/dev/input/by-path/platform-i8042-serio-0-event-kbd", nil
+	defaultKeyboardDevices = func() ([]string, error) {
+		return []string{"/dev/input/by-path/platform-i8042-serio-0-event-kbd"}, nil
 	}
 	openReader = func(devicePath string) (eventReader, error) {
 		t.Fatal("openReader should not be called in background mode")
@@ -243,13 +284,13 @@ func TestRun_DefaultBackground_StartsDetachedProcessAndReturns(t *testing.T) {
 func TestRun_DefaultBackground_WithPIDFile_WritesPID(t *testing.T) {
 	origNewClickPool := newClickPool
 	origOpenReader := openReader
-	origDefaultKeyboardDevice := defaultKeyboardDevice
+	origDefaultKeyboardDevices := defaultKeyboardDevices
 	origStartDetachedProcess := startDetachedProcess
 	origWritePIDFile := writePIDFile
 	defer func() {
 		newClickPool = origNewClickPool
 		openReader = origOpenReader
-		defaultKeyboardDevice = origDefaultKeyboardDevice
+		defaultKeyboardDevices = origDefaultKeyboardDevices
 		startDetachedProcess = origStartDetachedProcess
 		writePIDFile = origWritePIDFile
 	}()
@@ -258,8 +299,8 @@ func TestRun_DefaultBackground_WithPIDFile_WritesPID(t *testing.T) {
 		t.Fatal("newClickPool should not be called in background mode")
 		return nil, nil
 	}
-	defaultKeyboardDevice = func() (string, error) {
-		return "/dev/input/by-path/platform-i8042-serio-0-event-kbd", nil
+	defaultKeyboardDevices = func() ([]string, error) {
+		return []string{"/dev/input/by-path/platform-i8042-serio-0-event-kbd"}, nil
 	}
 	openReader = func(devicePath string) (eventReader, error) {
 		t.Fatal("openReader should not be called in background mode")
@@ -297,14 +338,14 @@ func TestRun_DefaultBackground_WithPIDFile_WritesPID(t *testing.T) {
 func TestRun_Stop_WithPIDFile_SendsSignalAndRemovesPIDFile(t *testing.T) {
 	origNewClickPool := newClickPool
 	origOpenReader := openReader
-	origDefaultKeyboardDevice := defaultKeyboardDevice
+	origDefaultKeyboardDevices := defaultKeyboardDevices
 	origReadPIDFile := readPIDFile
 	origSendSignal := sendSignal
 	origRemoveFile := removeFile
 	defer func() {
 		newClickPool = origNewClickPool
 		openReader = origOpenReader
-		defaultKeyboardDevice = origDefaultKeyboardDevice
+		defaultKeyboardDevices = origDefaultKeyboardDevices
 		readPIDFile = origReadPIDFile
 		sendSignal = origSendSignal
 		removeFile = origRemoveFile
@@ -314,9 +355,9 @@ func TestRun_Stop_WithPIDFile_SendsSignalAndRemovesPIDFile(t *testing.T) {
 		t.Fatal("newClickPool should not be called in stop mode")
 		return nil, nil
 	}
-	defaultKeyboardDevice = func() (string, error) {
-		t.Fatal("defaultKeyboardDevice should not be called in stop mode")
-		return "", nil
+	defaultKeyboardDevices = func() ([]string, error) {
+		t.Fatal("defaultKeyboardDevices should not be called in stop mode")
+		return nil, nil
 	}
 	openReader = func(devicePath string) (eventReader, error) {
 		t.Fatal("openReader should not be called in stop mode")
@@ -394,11 +435,11 @@ func TestRun_StopWithoutPIDFile_UsesDefaultPIDFile(t *testing.T) {
 func TestRun_ExplicitDeviceArg_SkipsDefaultDetection(t *testing.T) {
 	origNewClickPool := newClickPool
 	origOpenReader := openReader
-	origDefaultKeyboardDevice := defaultKeyboardDevice
+	origDefaultKeyboardDevices := defaultKeyboardDevices
 	defer func() {
 		newClickPool = origNewClickPool
 		openReader = origOpenReader
-		defaultKeyboardDevice = origDefaultKeyboardDevice
+		defaultKeyboardDevices = origDefaultKeyboardDevices
 	}()
 
 	stopErr := errors.New("stop loop")
@@ -409,9 +450,9 @@ func TestRun_ExplicitDeviceArg_SkipsDefaultDetection(t *testing.T) {
 	newClickPool = func(sampleRate int, volume float64, pitchLevel int, poolSize int) (clickPool, error) {
 		return &stubClickPool{}, nil
 	}
-	defaultKeyboardDevice = func() (string, error) {
+	defaultKeyboardDevices = func() ([]string, error) {
 		defaultCalled = true
-		return "", errors.New("should not be called")
+		return nil, errors.New("should not be called")
 	}
 	openReader = func(devicePath string) (eventReader, error) {
 		openedPath = devicePath
@@ -430,14 +471,14 @@ func TestRun_ExplicitDeviceArg_SkipsDefaultDetection(t *testing.T) {
 	}
 }
 
-func TestRun_DefaultKeyboardDeviceError_IsReturned(t *testing.T) {
+func TestRun_DefaultKeyboardDevicesError_IsReturned(t *testing.T) {
 	origNewClickPool := newClickPool
 	origOpenReader := openReader
-	origDefaultKeyboardDevice := defaultKeyboardDevice
+	origDefaultKeyboardDevices := defaultKeyboardDevices
 	defer func() {
 		newClickPool = origNewClickPool
 		openReader = origOpenReader
-		defaultKeyboardDevice = origDefaultKeyboardDevice
+		defaultKeyboardDevices = origDefaultKeyboardDevices
 	}()
 
 	detectErr := errors.New("detect failed")
@@ -445,8 +486,8 @@ func TestRun_DefaultKeyboardDeviceError_IsReturned(t *testing.T) {
 	newClickPool = func(sampleRate int, volume float64, pitchLevel int, poolSize int) (clickPool, error) {
 		return &stubClickPool{}, nil
 	}
-	defaultKeyboardDevice = func() (string, error) {
-		return "", detectErr
+	defaultKeyboardDevices = func() ([]string, error) {
+		return nil, detectErr
 	}
 	openReader = func(devicePath string) (eventReader, error) {
 		t.Fatalf("openReader should not be called, got %q", devicePath)
@@ -462,11 +503,11 @@ func TestRun_DefaultKeyboardDeviceError_IsReturned(t *testing.T) {
 func TestRun_ModifierKey_UsesModifierClickPool(t *testing.T) {
 	origNewClickPool := newClickPool
 	origOpenReader := openReader
-	origDefaultKeyboardDevice := defaultKeyboardDevice
+	origDefaultKeyboardDevices := defaultKeyboardDevices
 	defer func() {
 		newClickPool = origNewClickPool
 		openReader = origOpenReader
-		defaultKeyboardDevice = origDefaultKeyboardDevice
+		defaultKeyboardDevices = origDefaultKeyboardDevices
 	}()
 
 	stopErr := errors.New("stop loop")
@@ -481,8 +522,8 @@ func TestRun_ModifierKey_UsesModifierClickPool(t *testing.T) {
 		}
 		return modifierPool, nil
 	}
-	defaultKeyboardDevice = func() (string, error) {
-		return "/dev/input/by-path/platform-i8042-serio-0-event-kbd", nil
+	defaultKeyboardDevices = func() ([]string, error) {
+		return []string{"/dev/input/by-path/platform-i8042-serio-0-event-kbd"}, nil
 	}
 	openReader = func(devicePath string) (eventReader, error) {
 		return &sequenceReader{
@@ -506,11 +547,11 @@ func TestRun_ModifierKey_UsesModifierClickPool(t *testing.T) {
 func TestRun_KeyRepeatDoesNotPlayAgain(t *testing.T) {
 	origNewClickPool := newClickPool
 	origOpenReader := openReader
-	origDefaultKeyboardDevice := defaultKeyboardDevice
+	origDefaultKeyboardDevices := defaultKeyboardDevices
 	defer func() {
 		newClickPool = origNewClickPool
 		openReader = origOpenReader
-		defaultKeyboardDevice = origDefaultKeyboardDevice
+		defaultKeyboardDevices = origDefaultKeyboardDevices
 	}()
 
 	stopErr := errors.New("stop loop")
@@ -525,8 +566,8 @@ func TestRun_KeyRepeatDoesNotPlayAgain(t *testing.T) {
 		}
 		return modifierPool, nil
 	}
-	defaultKeyboardDevice = func() (string, error) {
-		return "/dev/input/by-path/platform-i8042-serio-0-event-kbd", nil
+	defaultKeyboardDevices = func() ([]string, error) {
+		return []string{"/dev/input/by-path/platform-i8042-serio-0-event-kbd"}, nil
 	}
 	openReader = func(devicePath string) (eventReader, error) {
 		return &sequenceReader{
@@ -553,11 +594,11 @@ func TestRun_KeyRepeatDoesNotPlayAgain(t *testing.T) {
 func TestRun_KeyUpAllowsNewClick(t *testing.T) {
 	origNewClickPool := newClickPool
 	origOpenReader := openReader
-	origDefaultKeyboardDevice := defaultKeyboardDevice
+	origDefaultKeyboardDevices := defaultKeyboardDevices
 	defer func() {
 		newClickPool = origNewClickPool
 		openReader = origOpenReader
-		defaultKeyboardDevice = origDefaultKeyboardDevice
+		defaultKeyboardDevices = origDefaultKeyboardDevices
 	}()
 
 	stopErr := errors.New("stop loop")
@@ -572,8 +613,8 @@ func TestRun_KeyUpAllowsNewClick(t *testing.T) {
 		}
 		return modifierPool, nil
 	}
-	defaultKeyboardDevice = func() (string, error) {
-		return "/dev/input/by-path/platform-i8042-serio-0-event-kbd", nil
+	defaultKeyboardDevices = func() ([]string, error) {
+		return []string{"/dev/input/by-path/platform-i8042-serio-0-event-kbd"}, nil
 	}
 	openReader = func(devicePath string) (eventReader, error) {
 		return &timedSequenceReader{
