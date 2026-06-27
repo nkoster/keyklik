@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	DefaultVolume         = 0.2
+	DefaultVolume         = 0.05
 	DefaultPitch          = 1
-	DefaultModifierVolume = 0.1
+	DefaultModifierVolume = 0.025
 	DefaultModifierPitch  = 2
 	SampleRate            = 48000
 	byPathDir             = "/dev/input/by-path"
