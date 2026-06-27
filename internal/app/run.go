@@ -107,7 +107,7 @@ func defaultPIDFilePath() string {
 		return filepath.Join(runtimeDir, "keyklik.pid")
 	}
 
-	return filepath.Join(os.TempDir(), "keyklik.pid")
+	return filepath.Join("/run", "keyklik.pid")
 }
 
 func programName(args []string) string {
