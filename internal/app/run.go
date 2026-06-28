@@ -22,6 +22,7 @@ import (
 const (
 	playerPoolSize = 4
 	minClickGap    = 8 * time.Millisecond
+	rescanInterval = 2 * time.Second
 )
 
 type clickPool interface {
@@ -43,6 +44,8 @@ var (
 		return input.Open(devicePath)
 	}
 	defaultKeyboardDevices = config.DefaultKeyboardDevices
+	dropSudoPrivileges     = maybeDropSudoPrivileges
+	runAsSudoUser          = maybeRunAsSudoUser
 	writePIDFile           = func(path string, pid int) error {
 		dir := filepath.Dir(path)
 		if dir != "" && dir != "." {
@@ -134,40 +137,17 @@ type sourcedEvent struct {
 	err        error
 }
 
-func openReaders(devicePaths []string) ([]eventReader, error) {
-	readers := make([]eventReader, 0, len(devicePaths))
-	for _, devicePath := range devicePaths {
-		reader, err := openReader(devicePath)
-		if err != nil {
-			for _, openedReader := range readers {
-				util.IgnoreErr(openedReader.Close)
+func startReader(devicePath string, reader eventReader, events chan<- sourcedEvent) {
+	go func() {
+		for {
+			ev, err := reader.ReadEvent()
+			if err != nil {
+				events <- sourcedEvent{devicePath: devicePath, err: err}
+				return
 			}
-			return nil, err
+			events <- sourcedEvent{devicePath: devicePath, event: ev}
 		}
-		readers = append(readers, reader)
-	}
-
-	return readers, nil
-}
-
-func readEventsFromAll(devicePaths []string, readers []eventReader) <-chan sourcedEvent {
-	events := make(chan sourcedEvent)
-
-	for idx, reader := range readers {
-		devicePath := devicePaths[idx]
-		go func(path string, r eventReader) {
-			for {
-				ev, err := r.ReadEvent()
-				if err != nil {
-					events <- sourcedEvent{devicePath: path, err: err}
-					return
-				}
-				events <- sourcedEvent{devicePath: path, event: ev}
-			}
-		}(devicePath, reader)
-	}
-
-	return events
+	}()
 }
 
 func sudoInvokingUserIDs(getenv func(string) string, euid int) (int, int, bool) {
@@ -194,6 +174,21 @@ func sudoInvokingUserIDs(getenv func(string) string, euid int) (int, int, bool) 
 	return uid, gid, true
 }
 
+func configureSudoUserEnv(uid int) {
+	runtimeDir := fmt.Sprintf("/run/user/%d", uid)
+	_ = os.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	_ = os.Setenv("PULSE_SERVER", "unix:"+runtimeDir+"/pulse/native")
+	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+		_ = os.Setenv("USER", sudoUser)
+		_ = os.Setenv("LOGNAME", sudoUser)
+	}
+	if u, err := user.LookupId(strconv.Itoa(uid)); err == nil && u.HomeDir != "" {
+		if os.Getenv("HOME") == "" || os.Getenv("HOME") == "/root" {
+			_ = os.Setenv("HOME", u.HomeDir)
+		}
+	}
+}
+
 func maybeDropSudoPrivileges() (int, int, bool, error) {
 	uid, gid, ok := sudoInvokingUserIDs(os.Getenv, os.Geteuid())
 	if !ok {
@@ -210,21 +205,39 @@ func maybeDropSudoPrivileges() (int, int, bool, error) {
 		return 0, 0, false, fmt.Errorf("drop privileges setuid failed: %w", err)
 	}
 
-	runtimeDir := fmt.Sprintf("/run/user/%d", uid)
-	if os.Getenv("XDG_RUNTIME_DIR") == "" {
-		_ = os.Setenv("XDG_RUNTIME_DIR", runtimeDir)
-	}
-	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
-		_ = os.Setenv("USER", sudoUser)
-		_ = os.Setenv("LOGNAME", sudoUser)
-	}
-	if u, err := user.LookupId(strconv.Itoa(uid)); err == nil && u.HomeDir != "" {
-		if os.Getenv("HOME") == "" || os.Getenv("HOME") == "/root" {
-			_ = os.Setenv("HOME", u.HomeDir)
-		}
-	}
+	configureSudoUserEnv(uid)
 
 	return uid, gid, true, nil
+}
+
+func maybeRunAsSudoUser(fn func() error) (int, int, bool, error) {
+	uid, gid, ok := sudoInvokingUserIDs(os.Getenv, os.Geteuid())
+	if !ok {
+		return 0, 0, false, fn()
+	}
+
+	originalEUID := os.Geteuid()
+	originalEGID := os.Getegid()
+	configureSudoUserEnv(uid)
+
+	if err := syscall.Setresgid(-1, gid, -1); err != nil {
+		return 0, 0, false, fmt.Errorf("temporarily switch to sudo gid failed: %w", err)
+	}
+	if err := syscall.Setresuid(-1, uid, -1); err != nil {
+		_ = syscall.Setresgid(-1, originalEGID, -1)
+		return 0, 0, false, fmt.Errorf("temporarily switch to sudo uid failed: %w", err)
+	}
+
+	fnErr := fn()
+
+	if err := syscall.Setresuid(-1, originalEUID, -1); err != nil {
+		return uid, gid, true, fmt.Errorf("restore root uid after audio setup failed: %w", err)
+	}
+	if err := syscall.Setresgid(-1, originalEGID, -1); err != nil {
+		return uid, gid, true, fmt.Errorf("restore root gid after audio setup failed: %w", err)
+	}
+
+	return uid, gid, true, fnErr
 }
 
 func requirePrivileges(stopMode bool) error {
@@ -259,6 +272,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 
 	shouldBackground := !cfg.Stop && !cfg.Foreground
+	autoDetectKeyboards := !cfg.Stop && cfg.KeyboardDevice == ""
 	keyboardDevices := make([]string, 0, 1)
 
 	if !cfg.Stop {
@@ -327,84 +341,157 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) error {
 		return nil
 	}
 
-	readers, err := openReaders(keyboardDevices)
-	if err != nil {
-		return err
-	}
-	for _, reader := range readers {
-		defer util.IgnoreErr(reader.Close)
-	}
-
-	uid, gid, dropped, err := maybeDropSudoPrivileges()
-	if err != nil {
-		return err
-	}
-	if dropped {
-		logf(stderr, "sudo detected: dropped privileges to uid=%d gid=%d for audio compatibility", uid, gid)
+	activeReaders := make(map[string]eventReader)
+	events := make(chan sourcedEvent)
+	startKeyboardReader := func(devicePath string) error {
+		reader, err := openReader(devicePath)
+		if err != nil {
+			return err
+		}
+		activeReaders[devicePath] = reader
+		startReader(devicePath, reader, events)
+		return nil
 	}
 
-	regularClickPool, err := newClickPool(config.SampleRate, cfg.Volume, cfg.PitchLevel, playerPoolSize)
-	if err != nil {
-		return err
+	for _, devicePath := range keyboardDevices {
+		if err := startKeyboardReader(devicePath); err != nil {
+			for _, reader := range activeReaders {
+				util.IgnoreErr(reader.Close)
+			}
+			return err
+		}
+	}
+	defer func() {
+		for _, reader := range activeReaders {
+			util.IgnoreErr(reader.Close)
+		}
+	}()
+
+	var regularClickPool clickPool
+	var modifierClickPool clickPool
+	createClickPools := func() error {
+		var err error
+		regularClickPool, err = newClickPool(config.SampleRate, cfg.Volume, cfg.PitchLevel, playerPoolSize)
+		if err != nil {
+			return err
+		}
+
+		modifierClickPool, err = newClickPool(config.SampleRate, cfg.ModifierVolume, cfg.ModifierPitch, playerPoolSize)
+		if err != nil {
+			regularClickPool.Close()
+			return err
+		}
+
+		return nil
+	}
+
+	if autoDetectKeyboards {
+		if uid, gid, ok := sudoInvokingUserIDs(os.Getenv, os.Geteuid()); ok {
+			logf(stderr, "sudo detected: keeping root privileges for keyboard hotplug; audio uses uid=%d gid=%d session", uid, gid)
+		}
+		if _, _, _, err := runAsSudoUser(createClickPools); err != nil {
+			return err
+		}
+	} else {
+		uid, gid, dropped, err := dropSudoPrivileges()
+		if err != nil {
+			return err
+		}
+		if dropped {
+			logf(stderr, "sudo detected: dropped privileges to uid=%d gid=%d for audio compatibility", uid, gid)
+		}
+		if err := createClickPools(); err != nil {
+			return err
+		}
 	}
 	defer regularClickPool.Close()
-
-	modifierClickPool, err := newClickPool(config.SampleRate, cfg.ModifierVolume, cfg.ModifierPitch, playerPoolSize)
-	if err != nil {
-		return err
-	}
 	defer modifierClickPool.Close()
 
 	logStartupInfo(stderr, cfg, keyboardDevices)
 
 	pressedKeys := make(map[string]map[uint16]bool)
 	lastClick := time.Time{}
-	events := readEventsFromAll(keyboardDevices, readers)
+	var rescanTicker *time.Ticker
+	var rescanC <-chan time.Time
+	if autoDetectKeyboards {
+		rescanTicker = time.NewTicker(rescanInterval)
+		rescanC = rescanTicker.C
+		defer rescanTicker.Stop()
+	}
 
 	for {
-		sourceEvent := <-events
-		if sourceEvent.err != nil {
-			return sourceEvent.err
-		}
-		ev := sourceEvent.event
+		select {
+		case <-rescanC:
+			devices, err := defaultKeyboardDevices()
+			if err != nil {
+				logf(stderr, "scan keyboards failed: %v", err)
+				continue
+			}
+			for _, devicePath := range devices {
+				if _, ok := activeReaders[devicePath]; ok {
+					continue
+				}
+				if err := startKeyboardReader(devicePath); err != nil {
+					logf(stderr, "open keyboard failed: %s: %v", devicePath, err)
+					continue
+				}
+				logf(stderr, "listening on %s", devicePath)
+			}
 
-		if !input.IsKeyboardEvent(ev) {
-			continue
-		}
+		case sourceEvent := <-events:
+			if sourceEvent.err != nil {
+				logf(stderr, "keyboard disconnected: %s", sourceEvent.devicePath)
+				if reader, ok := activeReaders[sourceEvent.devicePath]; ok {
+					util.IgnoreErr(reader.Close)
+					delete(activeReaders, sourceEvent.devicePath)
+				}
+				delete(pressedKeys, sourceEvent.devicePath)
+				if len(activeReaders) == 0 {
+					return fmt.Errorf("all keyboard devices disconnected")
+				}
+				continue
+			}
 
-		devicePressed, ok := pressedKeys[sourceEvent.devicePath]
-		if !ok {
-			devicePressed = make(map[uint16]bool)
-			pressedKeys[sourceEvent.devicePath] = devicePressed
-		}
+			ev := sourceEvent.event
 
-		if ev.Value == input.KeyUp {
-			delete(devicePressed, ev.Code)
-			continue
-		}
+			if !input.IsKeyboardEvent(ev) {
+				continue
+			}
 
-		if ev.Value != input.KeyDown {
-			continue
-		}
+			devicePressed, ok := pressedKeys[sourceEvent.devicePath]
+			if !ok {
+				devicePressed = make(map[uint16]bool)
+				pressedKeys[sourceEvent.devicePath] = devicePressed
+			}
 
-		if devicePressed[ev.Code] {
-			continue
-		}
-		devicePressed[ev.Code] = true
+			if ev.Value == input.KeyUp {
+				delete(devicePressed, ev.Code)
+				continue
+			}
 
-		now := time.Now()
-		if now.Sub(lastClick) < minClickGap {
-			continue
-		}
-		lastClick = now
+			if ev.Value != input.KeyDown {
+				continue
+			}
 
-		pool := regularClickPool
-		if input.IsModifierKey(ev.Code) {
-			pool = modifierClickPool
-		}
+			if devicePressed[ev.Code] {
+				continue
+			}
+			devicePressed[ev.Code] = true
 
-		if err := pool.Play(); err != nil {
-			logf(stderr, "play click failed: %v", err)
+			now := time.Now()
+			if now.Sub(lastClick) < minClickGap {
+				continue
+			}
+			lastClick = now
+
+			pool := regularClickPool
+			if input.IsModifierKey(ev.Code) {
+				pool = modifierClickPool
+			}
+
+			if err := pool.Play(); err != nil {
+				logf(stderr, "play click failed: %v", err)
+			}
 		}
 	}
 }

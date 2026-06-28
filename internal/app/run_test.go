@@ -133,6 +133,16 @@ func (s *timedSequenceReader) ReadEvent() (input.Event, error) {
 
 func (s *timedSequenceReader) Close() error { return nil }
 
+func expectAllKeyboardsDisconnected(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected all keyboards disconnected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "all keyboard devices disconnected") {
+		t.Fatalf("expected all keyboards disconnected error, got %v", err)
+	}
+}
+
 func TestRun_NoDeviceArg_UsesDefaultKeyboardDevice(t *testing.T) {
 	origNewClickPool := newClickPool
 	origOpenReader := openReader
@@ -159,9 +169,7 @@ func TestRun_NoDeviceArg_UsesDefaultKeyboardDevice(t *testing.T) {
 	}
 
 	err := Run([]string{"keyklik", "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
-	if !errors.Is(err, stopErr) {
-		t.Fatalf("expected stop error, got %v", err)
-	}
+	expectAllKeyboardsDisconnected(t, err)
 	if openedPath != detectedDevice {
 		t.Fatalf("expected open path %q, got %q", detectedDevice, openedPath)
 	}
@@ -194,9 +202,7 @@ func TestRun_NoDeviceArg_OpensAllDefaultKeyboardDevices(t *testing.T) {
 	}
 
 	err := Run([]string{"keyklik", "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
-	if !errors.Is(err, stopErr) {
-		t.Fatalf("expected stop error, got %v", err)
-	}
+	expectAllKeyboardsDisconnected(t, err)
 	if len(openedPaths) != 2 {
 		t.Fatalf("expected 2 opened paths, got %d (%v)", len(openedPaths), openedPaths)
 	}
@@ -205,6 +211,99 @@ func TestRun_NoDeviceArg_OpensAllDefaultKeyboardDevices(t *testing.T) {
 	}
 	if openedPaths[1] != secondDevice {
 		t.Fatalf("expected second open path %q, got %q", secondDevice, openedPaths[1])
+	}
+}
+
+func TestRun_DisconnectedKeyboardDoesNotStopOtherReaders(t *testing.T) {
+	origNewClickPool := newClickPool
+	origOpenReader := openReader
+	origDefaultKeyboardDevices := defaultKeyboardDevices
+	defer func() {
+		newClickPool = origNewClickPool
+		openReader = origOpenReader
+		defaultKeyboardDevices = origDefaultKeyboardDevices
+	}()
+
+	stopErr := errors.New("stop loop")
+	disconnectedDevice := "/dev/input/by-path/pci-0000:00:14.0-usb-0:13.4:1.0-event-kbd"
+	remainingDevice := "/dev/input/by-path/platform-i8042-serio-0-event-kbd"
+	regularPool := &countingClickPool{}
+	modifierPool := &countingClickPool{}
+	poolCall := 0
+
+	newClickPool = func(sampleRate int, volume float64, pitchLevel int, poolSize int) (clickPool, error) {
+		poolCall++
+		if poolCall == 1 {
+			return regularPool, nil
+		}
+		return modifierPool, nil
+	}
+	defaultKeyboardDevices = func() ([]string, error) {
+		return []string{disconnectedDevice, remainingDevice}, nil
+	}
+	openReader = func(devicePath string) (eventReader, error) {
+		if devicePath == disconnectedDevice {
+			return &stubReader{err: stopErr}, nil
+		}
+		return &timedSequenceReader{
+			events: []timedEvent{
+				{ev: input.Event{Type: 0x01, Code: 30, Value: input.KeyDown}, delay: 2 * time.Millisecond},
+			},
+			err: stopErr,
+		}, nil
+	}
+
+	err := Run([]string{"keyklik", "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
+	expectAllKeyboardsDisconnected(t, err)
+	if regularPool.plays != 1 {
+		t.Fatalf("expected remaining keyboard to play 1 click, got %d", regularPool.plays)
+	}
+	if modifierPool.plays != 0 {
+		t.Fatalf("expected modifier pool plays 0, got %d", modifierPool.plays)
+	}
+}
+
+func TestRun_AutoDetectedKeyboardsKeepsRootForHotplug(t *testing.T) {
+	origNewClickPool := newClickPool
+	origOpenReader := openReader
+	origDefaultKeyboardDevices := defaultKeyboardDevices
+	origDropSudoPrivileges := dropSudoPrivileges
+	origRunAsSudoUser := runAsSudoUser
+	defer func() {
+		newClickPool = origNewClickPool
+		openReader = origOpenReader
+		defaultKeyboardDevices = origDefaultKeyboardDevices
+		dropSudoPrivileges = origDropSudoPrivileges
+		runAsSudoUser = origRunAsSudoUser
+	}()
+
+	t.Setenv("SUDO_UID", "1000")
+	t.Setenv("SUDO_GID", "1000")
+
+	stopErr := errors.New("stop loop")
+	defaultKeyboardDevices = func() ([]string, error) {
+		return []string{"/dev/input/by-path/platform-i8042-serio-0-event-kbd"}, nil
+	}
+	openReader = func(devicePath string) (eventReader, error) {
+		return &stubReader{err: stopErr}, nil
+	}
+	newClickPool = func(sampleRate int, volume float64, pitchLevel int, poolSize int) (clickPool, error) {
+		return &stubClickPool{}, nil
+	}
+	runAsSudoUserCalled := false
+	runAsSudoUser = func(fn func() error) (int, int, bool, error) {
+		runAsSudoUserCalled = true
+		return 1000, 1000, true, fn()
+	}
+	dropSudoPrivileges = func() (int, int, bool, error) {
+		t.Fatal("dropSudoPrivileges should not be called for auto-detected keyboard hotplug")
+		return 0, 0, false, nil
+	}
+
+	err := Run([]string{"keyklik", "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
+	expectAllKeyboardsDisconnected(t, err)
+	if !runAsSudoUserCalled {
+		t.Fatal("expected audio setup to run as sudo user")
 	}
 }
 
@@ -515,9 +614,7 @@ func TestRun_ExplicitDeviceArg_SkipsDefaultDetection(t *testing.T) {
 	}
 
 	err := Run([]string{"keyklik", explicitDevice, "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
-	if !errors.Is(err, stopErr) {
-		t.Fatalf("expected stop error, got %v", err)
-	}
+	expectAllKeyboardsDisconnected(t, err)
 	if defaultCalled {
 		t.Fatal("expected default keyboard detection not to be called")
 	}
@@ -588,9 +685,7 @@ func TestRun_ModifierKey_UsesModifierClickPool(t *testing.T) {
 	}
 
 	err := Run([]string{"keyklik", "--foreground", "--modifier-volume", "0.50", "--modifier-pitch", "2"}, &bytes.Buffer{}, &bytes.Buffer{})
-	if !errors.Is(err, stopErr) {
-		t.Fatalf("expected stop error, got %v", err)
-	}
+	expectAllKeyboardsDisconnected(t, err)
 	if regularPool.plays != 0 {
 		t.Fatalf("expected regular pool plays 0, got %d", regularPool.plays)
 	}
@@ -635,9 +730,7 @@ func TestRun_KeyRepeatDoesNotPlayAgain(t *testing.T) {
 	}
 
 	err := Run([]string{"keyklik", "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
-	if !errors.Is(err, stopErr) {
-		t.Fatalf("expected stop error, got %v", err)
-	}
+	expectAllKeyboardsDisconnected(t, err)
 	if regularPool.plays != 1 {
 		t.Fatalf("expected regular pool plays 1, got %d", regularPool.plays)
 	}
@@ -683,9 +776,7 @@ func TestRun_KeyUpAllowsNewClick(t *testing.T) {
 	}
 
 	err := Run([]string{"keyklik", "--foreground"}, &bytes.Buffer{}, &bytes.Buffer{})
-	if !errors.Is(err, stopErr) {
-		t.Fatalf("expected stop error, got %v", err)
-	}
+	expectAllKeyboardsDisconnected(t, err)
 	if regularPool.plays != 2 {
 		t.Fatalf("expected regular pool plays 2, got %d", regularPool.plays)
 	}
